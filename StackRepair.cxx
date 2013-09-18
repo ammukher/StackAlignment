@@ -49,6 +49,70 @@ typedef itk::RGBPixel<PixelType> RGBPixelType;
 typedef itk::Image<RGBPixelType, Dimension> RGBImageType;
 typedef itk::CenteredRigid2DTransform<double> TransformType;
 
+
+void WriteDiffImage(const char* filename, ImageType::Pointer&fimg, ImageType::Pointer&mimg,TransformType::Pointer& Tx, int gx = 1000, int gy = 1000) {
+	//transforms the moving image (mimg) by Tx and superimposes on fixed image (fimg)
+	itk::RescaleIntensityImageFilter<ImageType,CharImageType>::Pointer rescaler1 = itk::RescaleIntensityImageFilter<ImageType,CharImageType>::New();
+	rescaler1->SetOutputMinimum(0);
+	rescaler1->SetOutputMaximum(127);
+	rescaler1->SetInput(fimg);
+	typedef itk::ResampleImageFilter<CharImageType, CharImageType>  ResampleFilterType;
+	ResampleFilterType::Pointer resample1 = ResampleFilterType::New();
+	TransformType::Pointer Teye = TransformType::New();
+	Teye->SetIdentity();
+	resample1->SetTransform( Teye );
+	resample1->SetInput( rescaler1->GetOutput() );	
+	ImageType::SizeType sz;
+	sz[0] = gx;
+	sz[1] = gy;
+	double o1[2];
+	o1[0] = static_cast<double>(-gx/2);
+	o1[1] = static_cast<double>(-gy/2);
+	resample1->SetSize( sz );
+	resample1->SetOutputOrigin( o1 );
+	double spacing[2]  = {1.0, 1.0};
+	resample1->SetOutputSpacing( spacing );
+	resample1->SetDefaultPixelValue( 127 );
+	
+	CharImageType::Pointer fimg2 = resample1->GetOutput();
+	fimg2->Update();
+
+	itk::RescaleIntensityImageFilter<ImageType,CharImageType>::Pointer rescaler2 = itk::RescaleIntensityImageFilter<ImageType,CharImageType>::New();
+	rescaler2->SetOutputMinimum(0);
+	rescaler2->SetOutputMaximum(127);
+	rescaler2->SetInput(mimg);
+
+	ResampleFilterType::Pointer resample2 = ResampleFilterType::New();
+	resample2->SetTransform( Tx );
+	resample2->SetInput( rescaler2->GetOutput() );	
+	resample2->SetSize( sz );
+	resample2->SetOutputOrigin( o1 );
+	resample2->SetOutputSpacing( spacing );
+	resample2->SetDefaultPixelValue( 127 );
+	CharImageType::Pointer mimg2 = resample2->GetOutput();
+	mimg2->Update();
+	
+	CharImageType::Pointer diff = CharImageType::New();
+	diff->SetRegions(sz);
+	diff->Allocate();
+	diff->FillBuffer(0);
+	
+	itk::ImageRegionIterator<CharImageType> itf(fimg2,fimg2->GetBufferedRegion().GetSize());
+	itk::ImageRegionIterator<CharImageType> itm(mimg2,mimg2->GetBufferedRegion().GetSize());
+	itk::ImageRegionIterator<CharImageType> itd(diff,diff->GetBufferedRegion().GetSize());
+	for (itf.GoToBegin(), itm.GoToBegin(), itd.GoToBegin(); !itf.IsAtEnd(); ++itf, ++itd, ++itm) {
+		itd.Set(128 + itf.Get() - itm.Get());
+	}
+	
+	itk::ImageFileWriter<CharImageType>::Pointer writer = itk::ImageFileWriter<CharImageType>::New();
+	writer->SetInput(diff);
+	stringstream Fname;
+	Fname << filename << ".png";
+	writer->SetFileName(Fname.str());
+	writer->Update();
+}
+
+
 void WriteImage(const char* filename, ImageType::Pointer&img, TransformType::Pointer& Tx, int gx = 1000, int gy = 1000) {
 
 	itk::RescaleIntensityImageFilter<ImageType,CharImageType>::Pointer rescaler = itk::RescaleIntensityImageFilter<ImageType,CharImageType>::New();
@@ -109,7 +173,7 @@ public:
 	Section();
 	void Show();
 	void initImageCenterFromMoment();
-	bool getPrepImage(double beta_inv, ImageType::Pointer& img);
+	bool getPrepImage(double beta_inv, ImageType::Pointer& img, double);
 	void Print() {cout << "Usable: " << (int)Usable << "("<< SequenceNumber <<") SectionName: " << SectionName <<  endl;}
 	
 };
@@ -172,8 +236,9 @@ void Section::Show() {
 }
 
 
-bool Section::getPrepImage(double beta_inv, ImageType::Pointer& img) {
+bool Section::getPrepImage(double beta_inv, ImageType::Pointer& img, double cropBorder = 0.0) {
 	
+	cout << "reading " << this->SectionPath.string() << endl;
 	itk::ImageFileReader<RGBImageType>::Pointer reader = itk::ImageFileReader<RGBImageType>::New();
 	reader->SetFileName(this->SectionPath.string());
 	RGBImageType::Pointer imRGB = reader->GetOutput();
@@ -212,7 +277,6 @@ bool Section::getPrepImage(double beta_inv, ImageType::Pointer& img) {
 	
 	PixelType pixMax = 0.0, pixMin = 255.0*255.0;
 	for (int col = 0; col<3; ++col) {
-		//cout << "Color " << col << endl;
 		for(it1.GoToBegin(), it2.GoToBegin(); !it1.IsAtEnd(); ++it1, ++it2) {
 			it2.Set(it1.Get()[col]);
 			if (pixMax < it1.Get()[col]) {pixMax = it1.Get()[col];}
@@ -235,9 +299,7 @@ bool Section::getPrepImage(double beta_inv, ImageType::Pointer& img) {
 		
 		medFilter->SetInput(img);
 		rgaussFilter->SetInput(medFilter->GetOutput());
-		//gaussFilter->SetInput(respimg);
 		medFilter2->SetInput(rgaussFilter->GetOutput());
-		//medFilter2->SetInput(medFilter->GetOutput());
 		ImageType::Pointer im2 = medFilter2->GetOutput();
 		im2->Update();
 
@@ -249,11 +311,7 @@ bool Section::getPrepImage(double beta_inv, ImageType::Pointer& img) {
 	}
 
 	if ((pixMax - pixMin) < 10) {
-		cout << "Dynamic range of the data bad " << pixMax << " " << pixMin << endl;
-		for (it2.GoToBegin(); !it2.IsAtEnd(); ++it2) {
-			it2.Set(0.0);
-		}
-		//cin.get();
+		cout << "Dynamic range of the data bad. Maximum pixel value: " << pixMax << " Minimum pixel value: " << pixMin << endl;
 		return false;
 	}	
 
@@ -301,10 +359,9 @@ bool Section::getPrepImage(double beta_inv, ImageType::Pointer& img) {
 	double mB = B[count];
 	
 
-	cout << "R = " << mR << ", G = " << mG << ", B = " << mB << endl;
+	cout << "Estimated Background R = " << mR << ", G = " << mG << ", B = " << mB << endl;
 	
 	vector<double> dist;
-	//this->img->FillBuffer(0.0);
 	dist.reserve(imRGB->GetBufferedRegion().GetNumberOfPixels());
 	for (mit.GoToBegin(), it1.GoToBegin(), it2.GoToBegin(); !it1.IsAtEnd(); ++mit, ++it1, ++it2) {
 		if (mit.Get() == 0) {
@@ -322,9 +379,6 @@ bool Section::getPrepImage(double beta_inv, ImageType::Pointer& img) {
 	sort(dist.begin(),dist.end());
 	unsigned int midloc = dist.size()/2;
 	double medDist = dist.at(midloc);
-	
-	//cout << "Data Size: " << dist.size() << " Midloc: " << midloc << endl;
-	//cout << "Median: " << medDist << endl;
 	
 	double fgmean = 0.0, fcount = 0.0;
 	for ( vector<double>::iterator it5 = dist.begin(); it5 != dist.end(); ++it5) {
@@ -369,8 +423,26 @@ bool Section::getPrepImage(double beta_inv, ImageType::Pointer& img) {
 	}
 	
 	itk::Size<2> size = img->GetBufferedRegion().GetSize();
-	itk::ImageRegionIteratorWithIndex<ImageType> itc(img, img->GetBufferedRegion());
+	//Apply the crop boundary
+	cropBorder /= 2.0;
+	size_t x1 = static_cast<size_t>(double(size[0])*cropBorder);
+	size_t y1 = static_cast<size_t>(double(size[1])*cropBorder);
+	size_t x2 = size[0] - x1;
+	size_t y2 = size[1] - y1;
 	
+	if ((x1 > 5) || (y1 > 5)) {
+		for (size_t y = 0; y < size[1]; ++y) {
+			for (size_t x = 0; x < size[0]; ++x) {
+				if ( (x <= x1) || ( y <= y1) || (x >= x2) || ( y >= y2) ) {
+					itk::Index<2> mdx = {{x,y}};
+					img->SetPixel(mdx,0.0);
+				}
+			}		
+		}
+	}
+	
+
+	itk::ImageRegionIteratorWithIndex<ImageType> itc(img, img->GetBufferedRegion());	
 	double mX = 0.0, mY = 0.0, den = 0.0;
 	for( itc.GoToBegin(); !itc.IsAtEnd(); ++itc) {
 		double d = static_cast<double>(itc.Get());
@@ -389,7 +461,7 @@ bool Section::getPrepImage(double beta_inv, ImageType::Pointer& img) {
 	orig[1] = -mY - (static_cast<double>(size[1])/2.0);
 	img->SetOrigin(orig);
 	this->origin = orig;
-	cout << "mX = " << orig[0] << ", mY = " << orig[1] << endl;
+	cout << "Image Origin set at: mX = " << orig[0] << ", mY = " << orig[1] << endl;
 	
 	if (debugON == true) {
 		itk::RescaleIntensityImageFilter<ImageType,CharImageType>::Pointer rescaler = itk::RescaleIntensityImageFilter<ImageType,CharImageType>::New();
@@ -413,41 +485,41 @@ public:
 	fs::path OutputDirectoryOLD, OutputDirectoryNEW,
 	ParameterFileOLD, ParameterFileNEW, TransformFilenameNEW;
 	vector<Section*> SectionList;
-	vector<double> InitRotationList;
 	vector<Links*> LinksList;
+	vector<double> InitRotationList;
+	vector<double> InitCropList;
 	Section *startSection;
 	string brain, label;
 	bool parameter_file_found;
 	unsigned int gx, gy;
 	vector<unsigned int> ExcludedSections;
 	vector< pair<unsigned int, unsigned int> > ExcludedLinks;
+	vector< pair<unsigned int, unsigned int> > RedoLinks;
+	vector< pair<unsigned int, double> > CropSections;
+	vector< pair<unsigned int, double> > preRotateSections;  
+
+	
 	
 	StackRepair(const char*, const char*, unsigned int, unsigned int);
 	~StackRepair();
-	bool ReadList(const char*);
-	bool ReadList(const char*p, fs::path& optdir); 
-	void Aligner(string&);
+	
+	void getCropAndRotation(unsigned int seq_no, double& crop, double& rotate);
 	void ResolveLinks();
 	bool ReadRecord();
-	bool IsGoodForStackAlignment(const unsigned int label);
 	double LinkSections(Section*sec1, Section *sec2, TransformType::Pointer& Tx);
 	bool parseParam(string param, string& tag, double & value); 
 	bool parseSectionLine(Section*sec,string& line);
 	void parseLinkLine(Links* link, string& line);
 	bool parseExclusions(string& exclu);
+	bool parseCmdString(string& exclu);
 	
 	void ComposeStack(const double* off);
-	//void ComputeAlignmentParameters(int, const int gx, const int gy);
-	//double register2dMultiScaledWithTransformedImage(Section*curr, Section *next, TransformType::Pointer& finaltransform) ;
 	double register2dMultiScaledWithTransformedImage(	ImageType::Pointer& fimg, double frot, 
 																ImageType::Pointer& mimg, double mrot, 
 																TransformType::Pointer& finaltransform);
-	//void WriteOutputImages(int, const unsigned int, const unsigned int);
-	//void WriteLinkParameters();
 	void WriteOutputImages();
 	void WriteTransforms();
-	void clean();
-
+	void WriteDiffImages( ); 
 };
 
 StackRepair::StackRepair(const char* oldDir, const char* newDir, unsigned int gx_, unsigned int gy_) {
@@ -482,6 +554,8 @@ StackRepair::StackRepair(const char* oldDir, const char* newDir, unsigned int gx
 	}
 	
 	if (parameter_file_found == false) {
+		cout << "It couldnot locate parameter files in " << OutputDirectoryOLD << endl;
+		cout << "A parameter file must have the form [brainName]_[label].txt" << endl;
 		return;
 	}
 	string recFileName = brain + string("_") + label + string(".txt");
@@ -491,6 +565,13 @@ StackRepair::StackRepair(const char* oldDir, const char* newDir, unsigned int gx
 	ParameterFileNEW /= recFileName;
 	TransformFilenameNEW = OutputDirectoryNEW;
 	TransformFilenameNEW /= XformFileName;
+
+	if (fs::exists(OutputDirectoryNEW) == true) {
+		cout << "Detected output directory " << OutputDirectoryNEW.string() << " ... clearing contents." << endl;
+		fs::remove_all(OutputDirectoryNEW);
+	}
+	fs::create_directory(OutputDirectoryNEW);
+
 	if (debugON == true) {
 		DebugDirectory = OutputDirectoryNEW;
 		DebugDirectory /= "DEBUG";
@@ -499,11 +580,6 @@ StackRepair::StackRepair(const char* oldDir, const char* newDir, unsigned int gx
 		}
 		fs::create_directory(DebugDirectory);
 	}
-	if (fs::exists(OutputDirectoryNEW) == true) {
-		cout << "Detected output directory " << OutputDirectoryNEW.string() << " ... clearing contents." << endl;
-		fs::remove_all(OutputDirectoryNEW);
-	}
-	fs::create_directory(OutputDirectoryNEW);
 }
 
 StackRepair::~StackRepair() {}
@@ -518,6 +594,21 @@ bool StackRepair::parseParam(string param, string& tag, double & value) {
 	return false;
 }
 
+
+void StackRepair::getCropAndRotation(unsigned int seq_no, double& crop, double& rotate) {
+	crop = 0.0;
+	rotate = 0.0;
+	for ( unsigned int i = 0; i < CropSections.size(); ++i ) {
+		if ( CropSections[i].first == seq_no ) {
+			crop = CropSections[i].second;
+		}	
+	}
+	for ( unsigned int i = 0; i < preRotateSections.size(); ++i ) {
+		if ( preRotateSections[i].first == seq_no ) {
+			rotate = preRotateSections[i].second;
+		}	
+	}
+}
 
 bool StackRepair::parseSectionLine(Section*sec,string& line) {
 	//1,105,F,PMD789&788-F35-2011.09.10-15.56.46_PMD788_3_0105,Ox=-447.95,Oy=-233.457,Dx=0.956245,Dy=-0.292567,Sx=783,Sy=616,Hf=0,Vf=0,Tf=0,path
@@ -554,10 +645,10 @@ bool StackRepair::parseSectionLine(Section*sec,string& line) {
 		n1=n2+1;
 		n2 = line.find_first_of(',',n1);
 	}
-	string directory = line.substr(n1);
-	sec->SectionPath = directory;
-	sec->SectionPath /= sec->SectionName;
-	sec->SectionPath += ".tif";
+	string filepath = line.substr(n1);
+	sec->SectionPath = filepath;
+	//sec->SectionPath /= sec->SectionName;
+	//sec->SectionPath += ".tif";
 	//sec->img = NULL;
 	return true;
 }
@@ -621,40 +712,48 @@ double StackRepair::LinkSections(Section*sec1, Section *sec2, TransformType::Poi
 	double beta_invList[4] = {5.0, 50.0, 100.0};
 	ImageType::Pointer A, B;
 	double minerror = 100.0;
-	cout << brain << ":" << label <<" T"<<setw(3)<<setfill( '0' )<< sec1->SequenceNumber <<
+	cout << brain << "(" << label <<")     T"<<setw(3)<<setfill( '0' )<< sec1->SequenceNumber <<
 	 " - T"<<setw(3)<<setfill( '0' )<< sec2->SequenceNumber <<" : "  ;
-
+	  
+	double cropA, cropB, arot, brot;
+	getCropAndRotation(sec1->SequenceNumber, cropA, arot);
+	getCropAndRotation(sec2->SequenceNumber, cropB, brot);
+		
 	for (int i=0; i<3; ++i) {
-		if ( (sec1->getPrepImage(beta_invList[i], A) == true) && 
-			(sec2->getPrepImage(beta_invList[i], B) == true) )	{
+		if ( (sec1->getPrepImage(beta_invList[i], A, cropA) == true) && 
+			(sec2->getPrepImage(beta_invList[i], B, cropB) == true) )	{
 				
-			double arot[3] = {-30, 0, 30};
-			double brot = 0;
-			for (int j=0; j<3; ++j) {
-				TransformType::Pointer Tx1 = TransformType::New();
-				double error1 = register2dMultiScaledWithTransformedImage(A, arot[j], B, brot, Tx1);
-				double angleDeg = 180.0*Tx1->GetParameters()[0]/vnl_math::pi;
-				
-				if (error1 < minerror) {
-					minerror = error1;
-					Tx->SetParametersByValue(Tx1->GetParameters());
-					//cout << angleDeg <<"\t" << error1 << "  ";
-					//cout << Tx->GetParameters() << endl;					
-				}
-				
-				TransformType::Pointer Tx2 = TransformType::New();
-				double error2 = register2dMultiScaledWithTransformedImage(B, brot, A, arot[j], Tx2);	
-				double angleDeg2 = 180.0*Tx2->GetParameters()[0]/vnl_math::pi;
-				if (error2 < minerror) {
-					minerror = error2;
-					Tx->SetCenter(Tx2->GetCenter());
-					Tx2->GetInverse(Tx);
-					//cout << -1.0*angleDeg2 <<"\t" << error2 << "  ";
-					//cout << Tx->GetParameters() << endl;
-				}
+
+			TransformType::Pointer Tx1 = TransformType::New();
+			double error1 = register2dMultiScaledWithTransformedImage(A, arot, B, brot, Tx1);
+			//double angleDeg = 180.0*Tx1->GetParameters()[0]/vnl_math::pi;
+			
+			if (error1 < minerror) {
+				minerror = error1;
+				Tx->SetParametersByValue(Tx1->GetParameters());
+				//cout << angleDeg <<"\t" << error1 << "  ";
+				//cout << Tx->GetParameters() << endl;					
+			}
+			
+			TransformType::Pointer Tx2 = TransformType::New();
+			double error2 = register2dMultiScaledWithTransformedImage(B, brot, A, arot, Tx2);	
+			//double angleDeg2 = 180.0*Tx2->GetParameters()[0]/vnl_math::pi;
+			if (error2 < minerror) {
+				minerror = error2;
+				Tx->SetCenter(Tx2->GetCenter());
+				Tx2->GetInverse(Tx);
+				//cout << -1.0*angleDeg2 <<"\t" << error2 << "  ";
+				//cout << Tx->GetParameters() << endl;
 			}
 		}
 	}
+	//Write diff image here
+	if (debugON == true) {
+		stringstream str_diff;
+		str_diff << DebugDirectory.string() <<"/DIFF_" << setw(3) << setfill('0') << sec1->SequenceNumber << "-" << setw(3) << setfill('0') << sec2->SequenceNumber << ".png";
+		WriteDiffImage(str_diff.str().c_str(), A, B, Tx, gx, gy);
+	}
+	
 	
 	cout << "**********************************************" << endl;
 	cout << Tx->GetParameters() << endl;
@@ -779,19 +878,6 @@ double StackRepair::register2dMultiScaledWithTransformedImage(	ImageType::Pointe
 	//cout << "Final inverse Param:" << finaltransform_invpara << endl;
 	cout << "\t\tMinimum value : " << optimizer->GetValue() << endl;
 	
-	if (debugON == true) {
-		
-		string str_f, str_m, str_mtx;
-		str_f = str_m = str_mtx = DebugDirectory.string();
-		str_f.append("/FIXED_");
-		str_m.append("/MOVING_");
-		str_mtx.append("/MOVING_TRANSFORMED");
-		WriteImage(str_f.c_str(), fimg2,gx,gy);
-		WriteImage(str_m.c_str(), mimg2,gx,gy);
-		WriteImage(str_mtx.c_str(), mimg2,finaltransform,gx,gy);
-		cout << " Stopping for debug (Press any key to continue)" << endl;
-		cin.get();
-	}
 	
 	return optimizer->GetValue();
 }
@@ -823,7 +909,7 @@ void StackRepair::ComposeStack(const double* off) {
 		}
 		 
 		if ((linkFound == false) && (sec->next != NULL)) {
-			cout << "Link not found" << endl;
+			cout << "Link not found (DEBUG CAREFULLY)" << endl;
 			continue;
 		}
 		
@@ -860,7 +946,7 @@ void StackRepair::ComposeStack(const double* off) {
 	//InitParam[3] = -1.0*off[1] - cgShift[0];
 	//InitParam[4] = -1.0*off[2] - cgShift[1];
 	Tranx->SetParameters(InitParam);
-	cout << "Start Param" << Tranx->GetParameters() << endl;
+	cout << "Starting Parameter (due to global transformations and CG shift): " << Tranx->GetParameters() << endl;
 	//startSection->Show();
 	//cin.get();
 	
@@ -881,7 +967,7 @@ void StackRepair::ComposeStack(const double* off) {
 			}
 		}
 		if ((linkFound == false) && (curr->next != NULL)) {
-			cout << "Link not found" << endl;
+			cout << "Link not found (NOT POSSIBLE unless faulty logic)" << endl;
 			//cin.get();
 		}
 		curr = curr->next;
@@ -969,7 +1055,133 @@ void StackRepair::ResolveLinks() {
 
 }
 
+bool StackRepair::parseCmdString(string& cmdString) {
+	bool brOpen = false, isLink = false, isCrop = false, isRot = false;
+	size_t n1 = 1, n2;
+	double val1, val2;
+	
+	for (unsigned int i=0; i<cmdString.length(); ++i) {
+		switch (cmdString[i]) {
+		case '[':	
+			brOpen = true; 
+			n1 = i+1;
+			break;	
+		case ',':
+			//cout << "Flags " << isLink << " " << isCrop << " " << isRot << endl;
+			n2 = i;
+			if ( (isLink==true) && (isCrop==false) && (isRot==false) ){
+				istringstream(cmdString.substr(n1,n2-n1)) >> val2;
+				//cout << "Link "<<  val1 << ":" << val2 << endl;
+				pair<int, int> p((unsigned int)val1, (unsigned int)val2);
+				RedoLinks.push_back(p);				
+			}
+			else if ((isLink==false) && (isCrop==true) && (isRot==false)) {
+				istringstream(cmdString.substr(n1,n2-n1)) >> val2;
+				//cout <<"Crop "<< val1 << "c" << val2 << endl;
+				pair<int, double> p((unsigned int)val1, val2);
+				CropSections.push_back(p);						
+			}
+			else if ((isLink==false) && (isCrop==false) && (isRot==true)) {
+				istringstream(cmdString.substr(n1,n2-n1)) >> val2;
+				//cout <<"Rotate "<< val1 << "r" << val2 << endl;
+				pair<int, double> p((unsigned int)val1, val2);
+				preRotateSections.push_back(p);		
+			}
+			else {
+				//cout <<"Exclude "<< val1 << endl;
+				istringstream(cmdString.substr(n1,n2-n1)) >> val1;
+				ExcludedSections.push_back((unsigned int)val1);
+			}
+			isLink = false;
+			isRot = false;
+			isCrop = false;
+			n1 = n2+1;
+			break;	
+		case ':':
+			n2 = i;
+			istringstream(cmdString.substr(n1,n2-n1)) >> val1;
+			isLink = true;
+			n1 = n2+1;
+			break;
+		case 'c':
+			n2 = i;
+			istringstream(cmdString.substr(n1,n2-n1)) >> val1;
+			isCrop = true;
+			n1 = n2+1;
+			break;
+		case 'r':
+			n2 = i;
+			istringstream(cmdString.substr(n1,n2-n1)) >> val1;
+			isRot = true;
+			n1 = n2+1;
+			break;			
+		case ']' :
+			n2 = i;
 
+			if (brOpen == true) {
+				brOpen = false;
+			}
+			
+			//cout << "Flags " << isLink << " " << isCrop << " " << isRot << endl;
+			
+			if ( (isLink==true) && (isCrop==false) && (isRot==false) ){
+				istringstream(cmdString.substr(n1,n2-n1)) >> val2;
+				//cout << val1 << ":" << val2 << endl;
+				pair<int, int> p((unsigned int)val1, (unsigned int)val2);
+				RedoLinks.push_back(p);				
+			}
+			else if ((isLink==false) && (isCrop==true) && (isRot==false)) {
+				istringstream(cmdString.substr(n1,n2-n1)) >> val2;
+				//cout << val1 << "c" << val2 << endl;
+				pair<int, double> p((unsigned int)val1, val2);
+				CropSections.push_back(p);						
+			}
+			else if ((isLink==false) && (isCrop==false) && (isRot==true)) {
+				istringstream(cmdString.substr(n1,n2-n1)) >> val2;
+				//cout << val1 << "r" << val2 << endl;
+				pair<int, double> p((unsigned int)val1, val2);
+				preRotateSections.push_back(p);		
+			}
+			else {
+				istringstream(cmdString.substr(n1,n2-n1)) >> val1;
+				ExcludedSections.push_back((unsigned int)val1);
+			}
+			
+			break;	
+		}		
+	}
+	cout << "Excluded sections: " << endl;
+	for (unsigned int i=0;i<ExcludedSections.size();++i){
+		cout << "\tExclude section " << ExcludedSections[i] << endl;
+	}
+	cout << endl;
+	cout << "Redo links: " << endl;
+	for (unsigned int i=0;i<RedoLinks.size();++i){
+		cout << "\tRedo " << RedoLinks[i].first <<" and " <<RedoLinks[i].second << endl;
+	}
+	cout << endl;
+	cout << "Crop sections: "<< endl;
+	for (unsigned int i=0;i<CropSections.size();++i){
+		if ((CropSections[i].second < 0.0) || (CropSections[i].second > 0.3)) {
+			cout << "\tborderCropping for " << CropSections[i].first <<" cannot be  " << CropSections[i].second  << " should be between 0.0 and 0.3 " << endl;
+			return false;
+		}
+		cout << "\tCrop " << CropSections[i].first <<" by " <<CropSections[i].second <<"% from border" << endl;
+	}
+	cout << endl;
+	cout << "preRotate sections: " << endl;
+	for (unsigned int i=0;i<preRotateSections.size();++i){
+		if ((preRotateSections[i].second < -180.0) || (preRotateSections[i].second > 180.0)) {
+			cout << "\tpreRotation angle for " << preRotateSections[i].first <<" cannot be  " << preRotateSections[i].second  << " should be between -180 and 180 " << endl;
+			return false;	
+		}
+		cout << "\tpreRotate " << preRotateSections[i].first <<" by " <<preRotateSections[i].second <<" degrees" << endl;
+	}
+	cout << endl;
+
+	return (brOpen==false) ? true : false;
+
+}
 
 bool StackRepair::parseExclusions(string& exclu) {
 //{4,5,3,2-3,3-4,3}
@@ -1113,15 +1325,13 @@ bool StackRepair::ReadRecord() {
 				//link->Print();
 				//check excluded links
 				bool badlink = false;
-				for(unsigned int j=0;j<ExcludedLinks.size();++j) {
-					if (((link->sec1->SequenceNumber == ExcludedLinks[j].first) && 
-						(link->sec2->SequenceNumber == ExcludedLinks[j].second)) || 
-						((link->sec2->SequenceNumber == ExcludedLinks[j].first) && 
-						(link->sec1->SequenceNumber == ExcludedLinks[j].second)) ){
+				for(unsigned int j=0;j<RedoLinks.size();++j) {
+					if ( ((link->sec1->SequenceNumber == RedoLinks[j].first) && 
+						(link->sec2->SequenceNumber == RedoLinks[j].second)) ){
 							cout << "Link " << link->sec1->SequenceNumber<< "-" << link->sec2->SequenceNumber<<"  was excluded" << endl;
 							//cin.get();
 							badlink = true;
-						}
+					}
 				}
 				
 				if (badlink == false) {
@@ -1135,9 +1345,96 @@ bool StackRepair::ReadRecord() {
 	return true;
 }
 
+
+void StackRepair::WriteDiffImages( ) {
+	
+	fs::path DiffImageDirectory = OutputDirectoryNEW;
+	DiffImageDirectory /= "DIFF";
+	
+	if (fs::exists(DiffImageDirectory) == true) {
+		fs::remove_all(DiffImageDirectory);
+	}
+	fs::create_directory(DiffImageDirectory);
+	
+	cout << "Computing DIFF images in " << DiffImageDirectory << endl;
+
+	Section *curr = startSection;
+	if (curr == NULL) {
+		return;
+	}
+	typedef itk::Image<itk::RGBPixel<unsigned char> , 2> ImageType2;
+	
+	int last_seq_no = -1;
+	ImageType2::Pointer last_imopt8;
+	while ( curr != NULL) {
+
+		stringstream ss;
+		ss << setw(4)<<setfill('0')<< curr->SequenceNumber<<"_";
+	
+		fs::path ofname = OutputDirectoryNEW;
+		ofname /= ss.str();
+		ofname += curr->SectionName;
+		ofname += string(".png");
+		
+		//if (fs::exists(ofname) == false) {
+		//	continue;
+		//}
+		
+		
+		itk::ImageFileReader<ImageType2>::Pointer reader = itk::ImageFileReader<ImageType2>::New();
+		reader->SetFileName(ofname.string());
+		ImageType2::Pointer imopt8 = reader->GetOutput();
+		try {
+			imopt8->Update();
+		}
+		catch (itk::ExceptionObject e) {
+			cout << "Error in reading" << ofname << endl << e.GetDescription() << endl;
+			continue;
+		}
+		
+		if (last_seq_no > 0) {
+			ImageType2::Pointer diff = ImageType2::New();
+			diff->SetRegions(imopt8->GetBufferedRegion());
+			diff->Allocate();
+
+			itk::ImageRegionIterator<ImageType2> it1( diff,diff->GetBufferedRegion() );
+			itk::ImageRegionIterator<ImageType2> it2( imopt8,imopt8->GetBufferedRegion() );
+			itk::ImageRegionIterator<ImageType2> it3( last_imopt8,last_imopt8->GetBufferedRegion() );
+			for (it1.GoToBegin(),it2.GoToBegin(),it3.GoToBegin(); !it1.IsAtEnd(); ++it1, ++it2, ++it3) {
+				ImageType2::PixelType p1;
+				ImageType2::PixelType p2 = it2.Get();
+				ImageType2::PixelType p3 = it3.Get();
+				for (int i = 0; i<3; ++i) {
+					p1[i] = 127 + p2[i]/2 - p3[i]/2;
+				}
+				it1.Set(p1);
+			}
+			stringstream dd;
+			dd << setw(4)<<setfill('0')<< last_seq_no <<"_"<< setw(4)<<setfill('0') << curr->SequenceNumber;			
+			
+			fs::path dfname = DiffImageDirectory;
+			dfname /= dd.str();
+			//dfname += curr->SectionName;
+			dfname += string(".png");
+			cout << "Writing " << dfname << endl;
+			if (fs::exists(dfname) == true) {
+				fs::remove(dfname);
+			}
+
+			
+			itk::ImageFileWriter<ImageType2>::Pointer writer = itk::ImageFileWriter<ImageType2>::New();
+			writer->SetInput(diff);
+			writer->SetFileName(dfname.string());
+			writer->Update();
+		}
+		last_imopt8 = imopt8;
+		last_seq_no = curr->SequenceNumber;
+		curr = curr->next;
+	}	
+}
+
 void StackRepair::WriteOutputImages( ) {
 	
-	vector<Section*>::iterator it;
 	cout << "Creating output images in " << OutputDirectoryNEW << endl;
 
 	Section *curr = startSection;
@@ -1155,7 +1452,7 @@ void StackRepair::WriteOutputImages( ) {
 		ofname /= ss.str();
 		ofname += curr->SectionName;
 		ofname += string(".png");
-		//cout << "Writing " << ofname << endl;
+		cout << "Writing " << ofname << endl;
 		if (fs::exists(ofname) == true) {
 			fs::remove(ofname);
 		}
@@ -1167,22 +1464,22 @@ void StackRepair::WriteOutputImages( ) {
 			continue;
 		}
 		TransformType::ParametersType param = curr->Tx->GetParameters();
-		cout << "Parameters: " << curr->SectionName << "," 
-		<< curr->origin[0] << ","
-		<< curr->origin[1] << ","
-		<< curr->direction[0] << ","
-		<< curr->direction[1] << ","
-		<< curr->size[0]<< ","
-		<< curr->size[1]<< ","
-		<< param[0] << "," 
-		<< param[1] << "," 
-		<< param[2] << "," 
-		<< param[3] << "," 
-		<< param[4] << ","
-		<< (int)curr->hflip << ","
-		<< (int)curr->vflip << ","
-		<< (int)curr->spProc << ","
-		<< endl;
+		// cout << "Parameters: " << curr->SectionName << "," 
+		// << curr->origin[0] << ","
+		// << curr->origin[1] << ","
+		// << curr->direction[0] << ","
+		// << curr->direction[1] << ","
+		// << curr->size[0]<< ","
+		// << curr->size[1]<< ","
+		// << param[0] << "," 
+		// << param[1] << "," 
+		// << param[2] << "," 
+		// << param[3] << "," 
+		// << param[4] << ","
+		// << (int)curr->hflip << ","
+		// << (int)curr->vflip << ","
+		// << (int)curr->spProc << ","
+		// << endl;
 		
 		itk::ImageFileReader<RGBImageType>::Pointer reader = itk::ImageFileReader<RGBImageType>::New();
 		reader->SetFileName(curr->SectionPath.string());
@@ -1374,13 +1671,15 @@ void StackRepair::WriteTransforms() {
 				",Sx=" <<	matchedSec->size[0] <<
 				",Sy=" <<	matchedSec->size[1] <<
 				",Hf=0,Vf=0,Tf=0," << 
-				matchedSec->SectionPath.parent_path().string().c_str() << endl;
+				//matchedSec->SectionPath.parent_path().string().c_str() << endl;
+				matchedSec->SectionPath.string().c_str() << endl;
 			}
 			else if ((SectionOK == 0) && (matchedSec != NULL)) {
 				ofid << "0,"<< matchedSec->SequenceNumber<<","	<< label << 
 				"," << matchedSec->SectionName << 
 				",Ox=0,Oy=0,Dx=0,Dy=0,Sx=0,Sy=0,Hf=0,Vf=0,Tf=0," <<
-				matchedSec->SectionPath.parent_path().string().c_str() << endl;
+				//matchedSec->SectionPath.parent_path().string().c_str() << endl;
+				matchedSec->SectionPath.string().c_str() << endl;
 			}
 			else {
 				line.append("\n");
@@ -1455,7 +1754,6 @@ int main(int argc, char * argv[]) {
 	
 	double off[3] = {0.0, 0.0, 0.0};
 	vector<bool> off_provided(3,false);
-	bool UserSuppliedGlobalparams = false;
 	double beta_inv = 25.0;
 	unsigned int gx = 1000;
 	unsigned int gy = 1000;
@@ -1497,12 +1795,12 @@ int main(int argc, char * argv[]) {
 			excl = value;
 			cout << "cmd: " << excl << endl;
 		}		
-		else if (token.compare("-debug") == 0) {
-			debugON = true;
-			cout << endl << "RUNNING IN DEBUG MODE (PRESS ENTER To CONFIRM)" << endl << endl;
-			cin.get();
-			i--;
-		}
+		// else if (token.compare("-debug") == 0) {
+			// debugON = true;
+			// cout << endl << "Cannot RUNNING IN DEBUG MODE (PRESS ENTER To CONFIRM)" << endl << endl;
+			// cin.get();
+			// i--;
+		// }
 		else {
 			cout << "Token "<< token <<" cannot be identified" << endl;
 			return EXIT_FAILURE;
@@ -1523,7 +1821,8 @@ int main(int argc, char * argv[]) {
 	
 	
 	if (excl.length() > 0) {
-		if (repr.parseExclusions(excl) == false) {
+		//if (repr.parseExclusions(excl) == false) {
+		if (repr.parseCmdString(excl)== false)  {
 			cout << "{CMD} cannot be parsed" << endl;
 			return EXIT_FAILURE;
 		}
@@ -1549,5 +1848,6 @@ int main(int argc, char * argv[]) {
 	repr.ComposeStack(off);
 	repr.WriteOutputImages();
 	repr.WriteTransforms();
+	repr.WriteDiffImages();
 	return EXIT_SUCCESS;
 }

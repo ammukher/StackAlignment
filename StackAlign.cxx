@@ -33,9 +33,8 @@
 
 
 #include "itkArray.h"
+#define DEBUGPRINT(x) if (debugON==true) {cout << x << endl;};
 
-//#include "StackAlign.h"
-//#include "StackAlign.h"
 
 using namespace std;
 namespace fs = boost::filesystem;
@@ -44,12 +43,72 @@ const unsigned int Dimension = 2;
 typedef  float PixelType;
 bool debugON;
 fs::path DebugDirectory;
+int debugXformCount = 0;
 
 typedef itk::Image<unsigned char,Dimension> CharImageType;
 typedef itk::Image<PixelType,Dimension> ImageType;
 typedef itk::RGBPixel<PixelType> RGBPixelType;
 typedef itk::Image<RGBPixelType, Dimension> RGBImageType;
+typedef itk::RGBPixel<unsigned short> RGBPixelType16;
+typedef itk::Image<RGBPixelType16, Dimension> RGBImageType16;
+typedef itk::RGBPixel<unsigned char> RGBPixelType8;
+typedef itk::Image<RGBPixelType8, Dimension> RGBImageType8;
 typedef itk::CenteredRigid2DTransform<double> TransformType;
+
+void WriteDiffImage(const char* filename, ImageType::Pointer&fimg, ImageType::Pointer&mimg,TransformType::Pointer& Tx, int gx = 1000, int gy = 1000) {
+	//transforms the moving image (mimg) by Tx and superimposes on fixed image (fimg)
+	itk::RescaleIntensityImageFilter<ImageType,CharImageType>::Pointer rescaler1 = itk::RescaleIntensityImageFilter<ImageType,CharImageType>::New();
+	rescaler1->SetOutputMinimum(0);
+	rescaler1->SetOutputMaximum(127);
+	rescaler1->SetInput(fimg);
+	CharImageType::Pointer fimg2 = rescaler1->GetOutput();
+	fimg2->Update();
+
+	itk::RescaleIntensityImageFilter<ImageType,CharImageType>::Pointer rescaler2 = itk::RescaleIntensityImageFilter<ImageType,CharImageType>::New();
+	rescaler2->SetOutputMinimum(0);
+	rescaler2->SetOutputMaximum(127);
+	rescaler2->SetInput(mimg);
+
+	typedef itk::ResampleImageFilter<CharImageType, CharImageType>  ResampleFilterType;
+	ResampleFilterType::Pointer resample = ResampleFilterType::New();
+	resample->SetTransform( Tx );
+	resample->SetInput( rescaler2->GetOutput() );	
+	ImageType::SizeType sz;
+	sz[0] = gx;
+	sz[1] = gy;
+	double o1[2];
+	o1[0] = static_cast<double>(-gx/2);
+	o1[1] = static_cast<double>(-gy/2);
+	resample->SetSize( sz );
+	resample->SetOutputOrigin( o1 );
+	double spacing[2]  = {1.0, 1.0};
+	resample->SetOutputSpacing( spacing );
+	resample->SetDefaultPixelValue( 127 );
+	CharImageType::Pointer mimg2 = resample->GetOutput();
+	mimg2->Update();
+	
+	CharImageType::Pointer diff = CharImageType::New();
+	diff->SetRegions(sz);
+	diff->Allocate();
+	diff->FillBuffer(0);
+	
+	itk::ImageRegionIterator<CharImageType> itf(fimg2,fimg2->GetBufferedRegion().GetSize());
+	itk::ImageRegionIterator<CharImageType> itm(mimg2,mimg2->GetBufferedRegion().GetSize());
+	itk::ImageRegionIterator<CharImageType> itd(diff,diff->GetBufferedRegion().GetSize());
+	for (itf.GoToBegin(), itm.GoToBegin(), itd.GoToBegin(); !itf.IsAtEnd(); ++itf, ++itd, ++itm) {
+		itd.Set(128 + itf.Get() - itm.Get());
+	}
+	
+	itk::ImageFileWriter<CharImageType>::Pointer writer = itk::ImageFileWriter<CharImageType>::New();
+	writer->SetInput(diff);
+	stringstream Fname;
+	Fname << filename << ".png";
+	writer->SetFileName(Fname.str());
+	writer->Update();
+}
+
+
+
 
 void WriteImage(const char* filename, ImageType::Pointer&img, TransformType::Pointer& Tx, int gx = 1000, int gy = 1000) {
 
@@ -175,10 +234,10 @@ void Section::Show() {
 
 
 bool Section::getPrepImage(double beta_inv, ImageType::Pointer& img) {
-	
 	itk::ImageFileReader<RGBImageType>::Pointer reader = itk::ImageFileReader<RGBImageType>::New();
 	reader->SetFileName(this->SectionPath.string());
 	RGBImageType::Pointer imRGB = reader->GetOutput();
+	DEBUGPRINT("Reading " << SectionPath.string())
 	try {
 		imRGB->Update();
 	}
@@ -187,7 +246,7 @@ bool Section::getPrepImage(double beta_inv, ImageType::Pointer& img) {
 		cout << "Error in reading" << this->SectionPath.string() << endl << e.GetDescription() << endl;
 		return false;
 	}
-	
+	this->size = imRGB->GetBufferedRegion().GetSize();
 	cout << this->SectionPath.string() << " read into memory of size " << imRGB->GetBufferedRegion().GetSize() << endl;
 	itk::ImageRegionIterator<RGBImageType> it1(imRGB,imRGB->GetBufferedRegion());
 
@@ -303,7 +362,7 @@ bool Section::getPrepImage(double beta_inv, ImageType::Pointer& img) {
 	double mB = B[count];
 	
 
-	cout << "R = " << mR << ", G = " << mG << ", B = " << mB << endl;
+	DEBUGPRINT( "R = " << mR << ", G = " << mG << ", B = " << mB )
 	
 	vector<double> dist;
 	//this->img->FillBuffer(0.0);
@@ -325,8 +384,7 @@ bool Section::getPrepImage(double beta_inv, ImageType::Pointer& img) {
 	unsigned int midloc = dist.size()/2;
 	double medDist = dist.at(midloc);
 	
-	//cout << "Data Size: " << dist.size() << " Midloc: " << midloc << endl;
-	//cout << "Median: " << medDist << endl;
+	DEBUGPRINT( "Data Size: " << dist.size() << " Midloc: " << midloc << endl << "Median: " << medDist )
 	
 	double fgmean = 0.0, fcount = 0.0;
 	for ( vector<double>::iterator it5 = dist.begin(); it5 != dist.end(); ++it5) {
@@ -338,7 +396,7 @@ bool Section::getPrepImage(double beta_inv, ImageType::Pointer& img) {
 
 	fgmean /= fcount;
 	fgmean = vcl_exp(fgmean); 
-	cout << "Fg mean: " << fgmean << endl;
+	DEBUGPRINT( "Fg mean: " << fgmean );
 	const double beta = 1.0/(beta_inv+0.001);
 	it2.GoToBegin();
 	unsigned int m = 0;
@@ -354,7 +412,7 @@ bool Section::getPrepImage(double beta_inv, ImageType::Pointer& img) {
 	sort(dist.begin(),dist.end());
 	unsigned int cut1 = m/20;
 	unsigned int cut2 = m - cut1;
-	cout << "Data Size: " << m << " Cut 1: " << dist[cut1] <<  " Cut 2: " << dist[cut2] << endl;
+	DEBUGPRINT( "Data Size: " << m << " Cut 1: " << dist[cut1] <<  " Cut 2: " << dist[cut2] )
 	
 	for (it2.GoToBegin(); !it2.IsAtEnd(); ++it2) {
 		if(it2.Get() < dist[cut1]) {
@@ -391,7 +449,7 @@ bool Section::getPrepImage(double beta_inv, ImageType::Pointer& img) {
 	orig[1] = -mY - (static_cast<double>(size[1])/2.0);
 	img->SetOrigin(orig);
 	this->origin = orig;
-	cout << "mX = " << orig[0] << ", mY = " << orig[1] << endl;
+	DEBUGPRINT( "mX = " << orig[0] << ", mY = " << orig[1] << endl)
 	
 	if (debugON == true) {
 		itk::RescaleIntensityImageFilter<ImageType,CharImageType>::Pointer rescaler = itk::RescaleIntensityImageFilter<ImageType,CharImageType>::New();
@@ -401,12 +459,12 @@ bool Section::getPrepImage(double beta_inv, ImageType::Pointer& img) {
 		itk::ImageFileWriter<CharImageType>::Pointer writer = itk::ImageFileWriter<CharImageType>::New();
 		writer->SetInput(rescaler->GetOutput());
 		stringstream grayFname;
-		grayFname << DebugDirectory.string() <<"/GRAY_" << beta_inv << "_" << SectionName << ".png";
+		grayFname << DebugDirectory.string() <<"/GRAY" <<setw(4) << setfill('0') << SequenceNumber <<"_"<< beta_inv << "_" << SectionName << ".png";
 		writer->SetFileName(grayFname.str());
 		writer->Update();
 	}
 
-	return true;
+	return true;	
 }
 
 
@@ -424,12 +482,13 @@ public:
 	
 	StackAlign(string& brain, string& label);
 	~StackAlign();
-	bool ReadList(const char*);
-	bool ReadList(const char*p, fs::path& optdir);
+	bool ReadList(fs::path&,fs::path& );
 	void Aligner(string&);
 	bool IsGoodForStackAlignment(const unsigned int label);
 	
 	void ComputeAlignmentParameters(const int gx, const int gy);
+	RGBPixelType getLargestClusterCenter(vector<RGBPixelType>& colVal) ;
+	PixelType getScalingFactor(vector<RGBPixelType>& colVal);
 	//double register2dMultiScaledWithTransformedImage(Section*curr, Section *next, TransformType::Pointer& finaltransform) ;
 	double register2dMultiScaledWithTransformedImage(	ImageType::Pointer& fimg, double frot, 
 																ImageType::Pointer& mimg, double mrot, 
@@ -438,6 +497,7 @@ public:
 	void WriteOutputImages( const unsigned int, const unsigned int);
 	void WriteLinkParameters(string& recFileName, string& XformFileName);
 	void clean();
+	void WriteDiffImages( );
 
 };
 
@@ -449,53 +509,45 @@ StackAlign::StackAlign(string& b, string& lbl) {
 	GlobalParameters[0] = 0;
 	GlobalParameters[1] = 0;
 	GlobalParameters[2] = 0;
+	ListFilename = fs::path("");
 }
 
 StackAlign::~StackAlign() {
 }
 
-bool StackAlign::ReadList(const char*p ) {
-
-	fs::path listFName = fs::path(p);
-	listFName = system_complete(listFName);
+bool StackAlign::ReadList(fs::path& listFName, fs::path& optdir) {
 	
-	fs::path optdir = listFName.parent_path();
-	optdir /= "Output";
-	if (fs::exists(optdir) == true) {
-		fs::remove_all(optdir);
-	}
-	fs::create_directory(optdir);
-	cout << "Creating output directory: " << optdir << endl;
-	
-	return (ReadList(p,optdir));
-
-}
-
-bool StackAlign::ReadList(const char*p, fs::path& optdir) {
-	
-	ListFilename = fs::path(p);
-	ListFilename = system_complete(ListFilename);
-	
+	ListFilename = fs::path(listFName);
 	OutputDirectory = optdir;
 	
+	if (fs::exists(OutputDirectory) == true) {
+		fs::remove_all(OutputDirectory);
+	}
+	fs::create_directory(OutputDirectory);
+
+	
 	if (debugON == true) {
-		DebugDirectory = ListFilename.parent_path();
+		DebugDirectory = optdir;
 		DebugDirectory /= "DEBUG";
 		if (fs::exists(DebugDirectory) == true) {
 			fs::remove_all(DebugDirectory);
 		}
 		fs::create_directory(DebugDirectory);
+		cout << "Creating debug directory: " << DebugDirectory << endl;
 	}
 	
 	ifstream fid(ListFilename.string().c_str(),ios::binary);
 	if (fid.good() == false) {
+		cout << "List file " << ListFilename.string() << " cannot be opened " << endl;
 		return false;
 	}
+	DEBUGPRINT("Parsing: " << ListFilename.string() )
 	
 	while(fid.good() == true) {
 		string line;
 		ListCount++;
 		getline(fid,line);
+		DEBUGPRINT("Line: " << line)
 		if (line.length() < 4) {
 			continue;
 		}
@@ -503,7 +555,7 @@ bool StackAlign::ReadList(const char*p, fs::path& optdir) {
 			continue;
 		}
 
-		cout << "Reading image file: " << line << endl;
+		//cout << "Reading image file: " << line << endl;
 		size_t n1 = line.find_last_of(":");
 		double rot = 0;
 		fs::path temp;
@@ -525,10 +577,10 @@ bool StackAlign::ReadList(const char*p, fs::path& optdir) {
 			sec->SectionPath = temp;
 			sec->SequenceNumber = UsableCount++;
 			sec->Usable = true;
-			sec->Show();
+			if (debugON == true) { sec->Show(); }
 			SectionList.push_back(sec);
 			InitRotationList.push_back(rot);
-			cout << "Pre Rotation: " << rot << endl;
+			DEBUGPRINT( "Pre Rotation: " << rot );
 			//cin.get();
 		}
 		else {
@@ -536,13 +588,14 @@ bool StackAlign::ReadList(const char*p, fs::path& optdir) {
 			cin.get();
 		}
 	}
+	DEBUGPRINT("# sections to process: " << SectionList.size() )
 	fid.close();
 	return true;
 }
 
 
 void StackAlign::ComputeAlignmentParameters( const int gx, const int gy) {
-	cout << endl << "ComputeAlignmentParameters"<< endl;
+	DEBUGPRINT (endl << "Computing Alignment Parameters on " << SectionList.size() <<  " sections."  << endl)
 	
 	TransformType::Pointer Tranx = TransformType::New();
 	Tranx->SetIdentity();
@@ -574,7 +627,7 @@ void StackAlign::ComputeAlignmentParameters( const int gx, const int gy) {
 		SectionList[i]->prev = SectionList[lasti];
 		SectionList[lasti]->next = SectionList[i];
 		SectionList[i]->next = NULL;	
-		cout << brain << ":" << label <<" T"<<setw(3)<<setfill( '0' )<< SectionList[lasti]->SequenceNumber <<
+		cout << brain << "(" << label <<")    T"<<setw(3)<<setfill( '0' )<< SectionList[lasti]->SequenceNumber <<
 			 " - T"<<setw(3)<<setfill( '0' )<< SectionList[i]->SequenceNumber <<" : "  ;
 		
 		double arot = InitRotationList[lasti], brot = InitRotationList[i];
@@ -582,25 +635,22 @@ void StackAlign::ComputeAlignmentParameters( const int gx, const int gy) {
 		TransformType::Pointer Tx = TransformType::New();
 		double error = register2dMultiScaledWithTransformedImage(A, arot, B, brot, Tx,	gx, gy);
 		double angleDeg = 180.0*Tx->GetParameters()[0]/vnl_math::pi;
-		cout << angleDeg <<"\t" << error << "  ";
-		cout << Tx->GetParameters() << endl;
+		DEBUGPRINT( angleDeg <<"\t" << error << "  " << Tx->GetParameters() )
 		if (error >= 0.05) {
-			cout << "Finding inverse :";	
+			DEBUGPRINT("Finding inverse :")
 			TransformType::Pointer Tx2 = TransformType::New();
 			double error2 = register2dMultiScaledWithTransformedImage(B, brot, A, arot, Tx2, gx, gy);	
 			double angleDeg2 = 180.0*Tx2->GetParameters()[0]/vnl_math::pi;
-			cout << angleDeg2 <<"\t" << error2 << "  ";
-			cout << Tx2->GetParameters() << endl;
+			DEBUGPRINT( angleDeg2 <<"\t" << error2 << "  " << Tx2->GetParameters() )
 			if (error2 < (error+0.02)) {
-				cout << "Inverse better then direct, substituting...  " << endl;
+				DEBUGPRINT("Inverse better then direct, substituting...  ")
 				Tx->SetCenter(Tx2->GetCenter());
 				Tx2->GetInverse(Tx);
 				error = error2;
 				angleDeg = -1.0*angleDeg2;
-				cout << "T"<<setw(3)<<setfill( '0' )<< SectionList[lasti]->SequenceNumber <<
-					 " - T"<<setw(3)<<setfill( '0' )<< SectionList[i]->SequenceNumber <<" : "  ;
-				cout << angleDeg <<"\t" << error << "  ";
-				cout << Tx->GetParameters() << endl;				
+				DEBUGPRINT( "T"<<setw(3)<<setfill( '0' )<< SectionList[lasti]->SequenceNumber <<
+					 " - T"<<setw(3)<<setfill( '0' )<< SectionList[i]->SequenceNumber <<" : " << 
+					 angleDeg <<"\t" << error << "  " << Tx->GetParameters() )
 			}
 			else {
 				double beta_invList[4] = {5.0, 50.0, 100.0};
@@ -611,7 +661,7 @@ void StackAlign::ComputeAlignmentParameters( const int gx, const int gy) {
 				ImageType::PointType Borig = B->GetOrigin();
 
 				for (int j=0; j<3; ++j) {
-					cout << "Trying option with beta_inv " << beta_invList[j] <<endl;
+					DEBUGPRINT(  "Trying option with beta_inv " << beta_invList[j] )
 					if ( (SectionList[start]->getPrepImage( beta_invList[j], A) )
 							&& (SectionList[start]->getPrepImage( beta_invList[j], B) ) == false) {
 						break;
@@ -620,14 +670,13 @@ void StackAlign::ComputeAlignmentParameters( const int gx, const int gy) {
 					B->SetOrigin(Borig); SectionList[i]->origin = Borig;
 					errorList = register2dMultiScaledWithTransformedImage(A, arot, B, brot, Tx,	gx, gy);
 					if (errorList < (error+0.02)) {
-						cout << "List better than direct, substituting...  " << endl;
+						DEBUGPRINT( "List better than direct, substituting...  " )
 						Tx->SetParameters(TxList->GetParameters());
 						error = errorList;
 						angleDeg = angleDegList;
-						cout << "T"<<setw(3)<<setfill( '0' )<< SectionList[lasti]->SequenceNumber <<
-							 " - T"<<setw(3)<<setfill( '0' )<< SectionList[i]->SequenceNumber <<" : "  ;
-						cout << angleDeg <<"\t" << error << "  ";
-						cout << Tx->GetParameters() << endl << endl;
+						DEBUGPRINT( "T"<<setw(3)<<setfill( '0' )<< SectionList[lasti]->SequenceNumber <<
+							 " - T"<<setw(3)<<setfill( '0' )<< SectionList[i]->SequenceNumber <<" : " << 
+							 angleDeg <<"\t" << error << "  " << Tx->GetParameters() << endl )
 					}	
 				}
 			}
@@ -682,13 +731,15 @@ void StackAlign::WriteLinkParameters(string& recFileName, string& XformFileName)
 			",Sx=" <<	SectionList[i]->size[0] <<
 			",Sy=" <<	SectionList[i]->size[1] <<
 			",Hf=0,Vf=0,Tf=0," << 
-			SectionList[i]->SectionPath.parent_path().string().c_str() << endl;
+			//SectionList[i]->SectionPath.parent_path().string().c_str() << endl;
+			SectionList[i]->SectionPath.string().c_str() << endl;
 		}
 		else {
 			ofid << "0,"<< SectionList[i]->SequenceNumber<<","	<< "G" << 
 			"," << SectionList[i]->SectionName << 
 			",Ox=0,Oy=0,Dx=0,Dy=0,Sx=0,Sy=0,Hf=0,Vf=0,Tf=0," <<
-			SectionList[i]->SectionPath.parent_path().string().c_str() << endl;
+			//SectionList[i]->SectionPath.parent_path().string().c_str() << endl;
+			SectionList[i]->SectionPath.string().c_str() << endl;
 		}
 	}
 	
@@ -775,7 +826,7 @@ void StackAlign::WriteOutputImages( unsigned int gx ,  unsigned int gy ) {
 			continue;
 		}
 		TransformType::ParametersType param = curr->Tx->GetParameters();
-		cout << "Parameters: " << curr->SectionName << "," 
+		DEBUGPRINT( "Parameters: " << curr->SectionName << "," 
 		<< curr->origin[0] << ","
 		<< curr->origin[1] << ","
 		<< curr->direction[0] << ","
@@ -790,7 +841,7 @@ void StackAlign::WriteOutputImages( unsigned int gx ,  unsigned int gy ) {
 		<< (int)curr->hflip << ","
 		<< (int)curr->vflip << ","
 		<< (int)curr->spProc << ","
-		<< endl;
+		)
 		
 		itk::ImageFileReader<RGBImageType>::Pointer reader = itk::ImageFileReader<RGBImageType>::New();
 		reader->SetFileName(curr->SectionPath.string());
@@ -806,13 +857,59 @@ void StackAlign::WriteOutputImages( unsigned int gx ,  unsigned int gy ) {
 		Mi(1,0) = -1.0*curr->direction[1];
 		Mi(1,1) = curr->direction[0];
 		imRGB->SetDirection(Mi);
+		itk::ImageRegionIterator< RGBImageType > it(imRGB,imRGB->GetBufferedRegion());
+		
+		//remove the cropping artifacts
+		typedef itk::Image<unsigned char,2> MaskType;
+		MaskType::Pointer mask = MaskType::New();
+		mask->SetRegions(imRGB->GetBufferedRegion());
+		mask->Allocate();
+		mask->FillBuffer(0);
+		itk::ImageRegionIterator< itk::Image<unsigned char,2> > itmask(mask,mask->GetBufferedRegion());
+
+		vector<RGBPixelType> colVal;
+		colVal.reserve(curr->size[0]*curr->size[1]);
+		int mcnt = 0;
+		RGBPixelType maxVal; maxVal.Fill(0);
+		for (it.GoToBegin(), itmask.GoToBegin(); !it.IsAtEnd(); ++it, ++itmask) {
+			RGBPixelType value = it.Get();
+			if ((value[0]==0.0) && (value[1]==0.0) && (value[2]==0.0)) {
+				mcnt++;
+				itmask.Set(255);
+			}
+			else if ((value[0]==255.0) && (value[1]==255.0) && (value[2]==255.0)) {
+				mcnt++;
+				itmask.Set(255);
+			}
+			else {
+				colVal.push_back(value);
+				for (int i=0; i<3;++i) {
+					maxVal[i] = (maxVal[i]>value[i]) ? maxVal[i] : value[i];
+				}
+			}
+		}
+		
+		DEBUGPRINT( "Pixels count in mask: " << mcnt << " out of "  << curr->size[0]*curr->size[1] );
+		DEBUGPRINT( "Max val " << maxVal )
+		
+		RGBPixelType DefPixelVal = getLargestClusterCenter(colVal);	
+		DEBUGPRINT( "Default pixel " << DefPixelVal )
+		
+		for (it.GoToBegin(), itmask.GoToBegin(); !it.IsAtEnd(); ++it, ++itmask) {
+			if (itmask.Get() == 255) {
+				it.Set(DefPixelVal);
+			}
+		}	
+		
+		PixelType meanLum = getScalingFactor(colVal); 
+		bool normRequired = (meanLum <= 1.1) ? false : true;
 
 		typedef itk::ResampleImageFilter<RGBImageType, RGBImageType>  ResampleFilterType;
 		ResampleFilterType::Pointer resample = ResampleFilterType::New();
 		resample->SetTransform( curr->Tx );
 
 		resample->SetInput( imRGB );
-		cout << "Size :" << imRGB->GetBufferedRegion().GetSize() << endl;
+		DEBUGPRINT( "Size :" << imRGB->GetBufferedRegion().GetSize() )
 		
 		//cout << "Setting Resampling params...." << endl;
 		ImageType::SizeType sz;
@@ -828,8 +925,8 @@ void StackAlign::WriteOutputImages( unsigned int gx ,  unsigned int gy ) {
 		resample->SetSize( sz );
 		resample->SetOutputOrigin( origin );
 		resample->SetOutputSpacing( spacing );
-		RGBPixelType rgb; rgb.Fill(127);
-		resample->SetDefaultPixelValue( rgb );
+		//RGBPixelType rgb; rgb.Fill(127);
+		resample->SetDefaultPixelValue( DefPixelVal );
 		RGBImageType::Pointer imopt16 = resample->GetOutput();
 		//cout << "Resampling ...."<< endl;
 		imopt16->Update();	               		
@@ -841,29 +938,15 @@ void StackAlign::WriteOutputImages( unsigned int gx ,  unsigned int gy ) {
 		
 		itk::ImageRegionIterator<RGBImageType> it1(imopt16,imopt16->GetBufferedRegion());
 		itk::ImageRegionIterator<ImageType2> it2(imopt8,imopt8->GetBufferedRegion());
-		
-		unsigned int dave = 0, cnt = 0;
-		float maxval = 0.0;	
-		for( it1.GoToBegin(), it2.GoToBegin(); !it1.IsAtEnd(); ++it1, ++it2) {
-			for (int i=0; i<3; ++i) {
-				maxval = vnl_math_max(maxval,it1.Get()[i]);
-				dave += it1.Get()[i]; 
-				cnt++; 	
-			}
-		}
-		  
-		dave /= cnt;
-		if (dave <= 25) {dave = 20;}
-		if (dave >= 80) {dave = 80;}
-		if (maxval <= 255.0) {
-			dave = 25;
-		}
-		//cout << "Ave intensity : " << dave << " ...."<< endl;
 			  
 		for( it1.GoToBegin(), it2.GoToBegin(); !it1.IsAtEnd(); ++it1, ++it2) {
 			itk::RGBPixel<unsigned char> d;	  
 			for (int i=0; i<3; ++i) {
-				unsigned short val = it1.Get()[i]*25/ dave;
+				unsigned short val = it1.Get()[i];
+				if (normRequired == true) {
+					val = val * 25.0/meanLum ; 
+					//val = 200 + sqrt(val-200);
+				}			
 				d[i] = static_cast<unsigned char>(vnl_math_min(255,val));
 			}
 			it2.Set(d);
@@ -876,8 +959,85 @@ void StackAlign::WriteOutputImages( unsigned int gx ,  unsigned int gy ) {
 		//cout << "Written" << endl;
 		curr = curr->next;
 	}
-
 	cout << "Writing complete " << endl;
+}
+
+PixelType StackAlign::getScalingFactor(vector<RGBPixelType>& colVal) {
+	DEBUGPRINT("Computing scaling factor")
+	bool is16bit = false;
+	vector<PixelType> allPixels;
+	allPixels.reserve(colVal.size()*3);
+	DEBUGPRINT("Expected elemints" << colVal.size()*3 )
+	for (unsigned int i=0; i<colVal.size(); ++i){
+		for (int r=0; r<3; ++r) {
+			if (colVal[i][r] > 255) {
+				is16bit = true;
+			}
+			allPixels.push_back((PixelType)colVal[i][r]);
+		}
+	}
+	DEBUGPRINT("Total elemints" << allPixels.size() )
+	if (is16bit == false) {
+		DEBUGPRINT( "Brightfield image -- No scaling");	
+		return 1;
+	}
+	else {
+		sort(allPixels.begin(), allPixels.end());
+		size_t cutOff = allPixels.size()*9/10;
+		PixelType cutOffVal = allPixels[cutOff];
+		double meanLum = 0.0, count = 0.0;
+		for(size_t i = 0; i < allPixels.size(); ++i) {
+			if (allPixels[i] < cutOffVal) {
+				meanLum += (double)allPixels[i];
+				count += 1.0;
+			}
+		}
+		meanLum /= count;
+		DEBUGPRINT("Darkfield image with mean Lum "  << meanLum << " cutOff at " << cutOffVal << " Estimated from " << (int)count << " samples");	
+		//meanLum *= 25.0;
+		return static_cast<PixelType>(meanLum);
+	}
+}
+
+RGBPixelType StackAlign::getLargestClusterCenter(vector<RGBPixelType>& colVal) {
+	double meanCol[3] = {0,0,0};
+	for (unsigned int i=0; i<colVal.size(); ++i){
+		for (int r=0; r<3; ++r) {
+			meanCol[r] += (double)colVal[i][r];
+		}
+	}
+	
+	//cout << "Totals ["  << meanCol[0] << "," << meanCol[1] << ","<< meanCol[2] <<   "]" << endl;
+	for (int r=0; r<3; ++r) { 	meanCol[r] /= (double)colVal.size();}
+	//cout << "Initial col ["  << meanCol[0] << "," << meanCol[1] << ","<< meanCol[2] <<   "]" << endl;
+	
+	unsigned int cutPerct[10] = {90,80,70,60,50,40,30,30,30,30};
+	for (int iter = 0; iter < 10; ++iter)	{
+		vector<double> dist(colVal.size(),0.0); 
+		for (unsigned int i=0; i<colVal.size(); ++i){
+			//dist[i] = 0;
+			for (int r=0; r<3; ++r) { dist[i] += vnl_math_abs( meanCol[r] -  (double)colVal[i][r]);	}
+		}
+		sort(dist.begin(), dist.end());
+		size_t cutPt = colVal.size()*cutPerct[iter]/100;
+		double cutDist = dist[cutPt];
+		//cout << "CutPt " << cutPt << "  Cutdist " << cutDist << endl;
+		
+		double meanColNew[3] = {0.0,0.0,0.0}, count = 0.0;
+		for (unsigned int i=0; i<colVal.size(); ++i){
+			double d = 0;
+			for (int r=0; r<3; ++r) { 	d += vnl_math_abs( meanCol[r] -  (double)colVal[i][r]);	}
+			if (d < cutDist) {
+				for (int r=0; r<3; ++r) { meanColNew[r] += (double)colVal[i][r]; }
+				count++;	
+			}
+		}
+		for (int r=0; r<3; ++r) { meanCol[r] = meanColNew[r]/count;	}
+		//cout << "Iter " << iter  << "  col ["  << meanCol[0] << "," << meanCol[1] << ","<< meanCol[2] << "]" << endl;
+	}
+	RGBPixelType ret; 
+	for (int r=0; r<3; ++r) { ret[r] = (PixelType)meanCol[r];}
+	return ret;
 }
 
 
@@ -1000,21 +1160,114 @@ double StackAlign::register2dMultiScaledWithTransformedImage(	ImageType::Pointer
 	cout << "Minimum value : " << optimizer->GetValue() << endl;
 	
 	if (debugON == true) {
-		
-		string str_f, str_m, str_mtx;
-		str_f = str_m = str_mtx = DebugDirectory.string();
-		str_f.append("/FIXED_");
-		str_m.append("/MOVING_");
-		str_mtx.append("/MOVING_TRANSFORMED");
-		WriteImage(str_f.c_str(), fimg2,gx,gy);
-		WriteImage(str_m.c_str(), mimg2,gx,gy);
-		WriteImage(str_mtx.c_str(), mimg2,finaltransform,gx,gy);
-		cout << " Stopping for debug (Press any key to continue)" << endl;
-		cin.get();
+		debugXformCount++;
+		stringstream cntstr; cntstr << setw(4) << setfill('0') << debugXformCount << "-" << setw(4) << setfill('0') << debugXformCount+1 ;
+		string str_f, str_m, str_mtx, str_diff;
+		str_f = str_m = str_mtx = str_diff = DebugDirectory.string();
+		//str_f.append("/FIXED_").append(cntstr.str()).append("_");
+		//str_m.append("/MOVING_").append(cntstr.str()).append("_");
+		//str_mtx.append("/MOVING_TRANSFORMED_").append(cntstr.str()).append("_");
+		str_diff.append("/DIFF_").append(cntstr.str()).append("_");
+		//WriteImage(str_f.c_str(), fimg2,gx,gy);
+		//WriteImage(str_m.c_str(), mimg2,gx,gy);
+		//WriteImage(str_mtx.c_str(), mimg2,finaltransform,gx,gy);
+		WriteDiffImage(str_diff.c_str(), fimg2, mimg2,finaltransform,gx,gy);
+		//cout << " Stopping for debug (Press any key to continue)" << endl;
+		//cin.get();
 	}
 	
 	return optimizer->GetValue();
 }
+
+
+void StackAlign::WriteDiffImages( ) {
+	
+	fs::path DiffImageDirectory = OutputDirectory;
+	DiffImageDirectory /= "DIFF";
+	
+	if (fs::exists(DiffImageDirectory) == true) {
+		fs::remove_all(DiffImageDirectory);
+	}
+	fs::create_directory(DiffImageDirectory);
+	
+	cout << "Computing DIFF images in " << DiffImageDirectory << endl;
+
+	Section *curr = startSection;
+	if (curr == NULL) {
+		return;
+	}
+	typedef itk::Image<itk::RGBPixel<unsigned char> , 2> ImageType2;
+	
+	int last_seq_no = -1;
+	ImageType2::Pointer last_imopt8;
+	while ( curr != NULL) {
+
+		stringstream ss;
+		ss << setw(4)<<setfill('0')<< curr->SequenceNumber<<"_";
+	
+		fs::path ofname = OutputDirectory;
+		ofname /= ss.str();
+		ofname += curr->SectionName;
+		ofname += string(".png");
+		
+		//if (fs::exists(ofname) == false) {
+		//	continue;
+		//}
+		
+		
+		itk::ImageFileReader<ImageType2>::Pointer reader = itk::ImageFileReader<ImageType2>::New();
+		reader->SetFileName(ofname.string());
+		ImageType2::Pointer imopt8 = reader->GetOutput();
+		try {
+			imopt8->Update();
+		}
+		catch (itk::ExceptionObject e) {
+			cout << "Error in reading" << ofname << endl << e.GetDescription() << endl;
+			continue;
+		}
+		
+		if (last_seq_no > 0) {
+			ImageType2::Pointer diff = ImageType2::New();
+			diff->SetRegions(imopt8->GetBufferedRegion());
+			diff->Allocate();
+
+			itk::ImageRegionIterator<ImageType2> it1( diff,diff->GetBufferedRegion() );
+			itk::ImageRegionIterator<ImageType2> it2( imopt8,imopt8->GetBufferedRegion() );
+			itk::ImageRegionIterator<ImageType2> it3( last_imopt8,last_imopt8->GetBufferedRegion() );
+			for (it1.GoToBegin(),it2.GoToBegin(),it3.GoToBegin(); !it1.IsAtEnd(); ++it1, ++it2, ++it3) {
+				ImageType2::PixelType p1;
+				ImageType2::PixelType p2 = it2.Get();
+				ImageType2::PixelType p3 = it3.Get();
+				for (int i = 0; i<3; ++i) {
+					p1[i] = 127 + p2[i]/2 - p3[i]/2;
+				}
+				it1.Set(p1);
+			}
+			stringstream dd;
+			dd << setw(4)<<setfill('0')<< last_seq_no <<"_"<< setw(4)<<setfill('0') << curr->SequenceNumber;			
+			
+			fs::path dfname = DiffImageDirectory;
+			dfname /= dd.str();
+			//dfname += curr->SectionName;
+			dfname += string(".png");
+			//cout << "Writing " << dfname << endl;
+			if (fs::exists(dfname) == true) {
+				fs::remove(dfname);
+			}
+
+			
+			itk::ImageFileWriter<ImageType2>::Pointer writer = itk::ImageFileWriter<ImageType2>::New();
+			writer->SetInput(diff);
+			writer->SetFileName(dfname.string());
+			writer->Update();
+		}
+		last_imopt8 = imopt8;
+		last_seq_no = curr->SequenceNumber;
+		curr = curr->next;
+	}	
+	cout << "Writing complete" << endl;
+}
+
 
 
 
@@ -1041,10 +1294,18 @@ int main(int argc, const char **argv) {
 	bool hasOutputpath = false;
 	fs::path outputpath;
 	string brain(""), label("");
-	
-	while (i < (argc-1)) {
-		string token(argv[i++]);
-		string value(argv[i++]);
+		
+	while (i < argc) {
+		//cout << "arg# " << i << " out of " << argc << endl;
+		//cout << "token " << argv[i] << endl;
+		string token(argv[i]), value("");
+		i++;
+		if (i < argc) {
+			//cout << "value " << argv[i] << endl;		
+			value.assign(argv[i]);
+			i++;	
+		}
+		
 		if (token.compare("-beta_inv") == 0) {
 			beta_inv = atof(value.c_str());
 			cout << "beta inv: " << beta_inv << endl;
@@ -1073,16 +1334,19 @@ int main(int argc, const char **argv) {
 
 		else if (token.compare("-debug") == 0) {
 			debugON = true;
-			cout << endl << "RUNNING IN DEBUG MODE (PRESS ENTER)" << endl << endl;
-			cin.get();
-			i--;
+			cout << endl << "RUNNING IN DEBUG MODE " << endl << endl;
+			
 		}
 		else {
 			cout << "Token "<< token <<" cannot be identified" << endl;
 			return EXIT_FAILURE;
-		}		
+		}	
+		//cout << "OK" << endl;	
 	}
-
+	
+	DEBUGPRINT("Completed Parsing input parameters")
+	//cin.get();
+	
 	time_t starttime;
 	time(&starttime); 
 	//cin.get();
@@ -1094,36 +1358,37 @@ int main(int argc, const char **argv) {
 	}
 	recFileName = brain + string("_") + label + string(".txt");
 	XformFileName = brain + string("_") + label + string("_XForm.txt");
+	fs::path listFName = fs::path(argv[1]);
+	//listFName = system_complete(listFName);
+	DEBUGPRINT("Listfile : " << listFName  )
+	DEBUGPRINT("Parameter FileName : " << recFileName  )
+	DEBUGPRINT("Transform FileName : " << XformFileName  )
+	
 	
 	if (hasOutputpath == false) {
-		fs::path listFName = fs::path(argv[1]);
-		listFName = system_complete(listFName);
-		outputpath = listFName.parent_path();
+		outputpath = fs::current_path();
 		outputpath /= "Output";
 	}
 	
-	if (fs::exists(outputpath) == true) {
-		fs::remove_all(outputpath);
-	}
-	fs::create_directory(outputpath);
-	cout << "Creating new output directory: " << outputpath << endl;
+	//cout << "Creating new output directory: " << outputpath << endl;
 	
 	
 	StackAlign *stack = new StackAlign(brain, label);  
-	if (stack->ReadList(argv[1], outputpath) == false) {
+	if (stack->ReadList(listFName, outputpath) == false) {
 		cout << "Cannot read list file" << endl;
 		return EXIT_FAILURE;
 	}
-	//cin.get();
+	DEBUGPRINT("Parsed list file : " << listFName  )
+	
 	
 	stack->ComputeAlignmentParameters( gx, gy);
 	stack->WriteLinkParameters(recFileName, XformFileName);
 	stack->WriteOutputImages( gx, gy );
+	stack->WriteDiffImages();
 	delete stack;
 	
 	time_t endtime; 
 	time(&endtime);
 	cout << " Complete in " <<difftime(endtime, starttime)/60.0 << " mins"<< endl;
-
 	return EXIT_SUCCESS;		
 }
