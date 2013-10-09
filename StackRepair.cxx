@@ -8,10 +8,10 @@
 #include <vector>
 #include <iomanip>
 #include <boost/algorithm/string.hpp>
-#include <sys/time.h>
+//#include <sys/time.h>
 #include <boost/filesystem.hpp>
-#include <unistd.h>
-#include <sys/stat.h>
+//#include <unistd.h>
+//#include <sys/stat.h>
 #include "itkImage.h"
 #include "itkImageFileReader.h"
 #include "itkImageFileWriter.h"
@@ -30,8 +30,9 @@
 #include "itkMeanSquaresImageToImageMetric.h"
 #include "itkRegularStepGradientDescentOptimizer.h"
 #include "itkMultiResolutionImageRegistrationMethod.h"
+#include "itkCheckerBoardImageFilter.h"
 
-
+#include "itkJPEGImageIO.h"
 #include "itkArray.h"
 
 
@@ -92,7 +93,18 @@ void WriteDiffImage(const char* filename, ImageType::Pointer&fimg, ImageType::Po
 	CharImageType::Pointer mimg2 = resample2->GetOutput();
 	mimg2->Update();
 	
-	CharImageType::Pointer diff = CharImageType::New();
+	itk::CheckerBoardImageFilter<CharImageType>::Pointer checkerbd =  itk::CheckerBoardImageFilter<CharImageType>::New();
+	checkerbd->SetInput1(fimg2);
+	checkerbd->SetInput2(mimg2);
+
+	itk::ImageFileWriter<CharImageType>::Pointer writer = itk::ImageFileWriter<CharImageType>::New();
+	writer->SetInput(checkerbd->GetOutput());
+	stringstream Fname;
+	Fname << filename << "_chkbd.png";
+	writer->SetFileName(Fname.str());
+	writer->Update();
+
+	/*CharImageType::Pointer diff = CharImageType::New();
 	diff->SetRegions(sz);
 	diff->Allocate();
 	diff->FillBuffer(0);
@@ -110,8 +122,8 @@ void WriteDiffImage(const char* filename, ImageType::Pointer&fimg, ImageType::Po
 	Fname << filename << ".png";
 	writer->SetFileName(Fname.str());
 	writer->Update();
+	*/
 }
-
 
 void WriteImage(const char* filename, ImageType::Pointer&img, TransformType::Pointer& Tx, int gx = 1000, int gy = 1000) {
 
@@ -442,7 +454,7 @@ bool Section::getPrepImage(double beta_inv, ImageType::Pointer& img, double crop
 	}
 	
 
-	itk::ImageRegionIteratorWithIndex<ImageType> itc(img, img->GetBufferedRegion());	
+	/*itk::ImageRegionIteratorWithIndex<ImageType> itc(img, img->GetBufferedRegion());	
 	double mX = 0.0, mY = 0.0, den = 0.0;
 	for( itc.GoToBegin(); !itc.IsAtEnd(); ++itc) {
 		double d = static_cast<double>(itc.Get());
@@ -461,7 +473,9 @@ bool Section::getPrepImage(double beta_inv, ImageType::Pointer& img, double crop
 	orig[1] = -mY - (static_cast<double>(size[1])/2.0);
 	img->SetOrigin(orig);
 	this->origin = orig;
-	cout << "Image Origin set at: mX = " << orig[0] << ", mY = " << orig[1] << endl;
+	*/
+	img->SetOrigin(this->origin);
+	cout << "Image Origin set at: " << img->GetOrigin() << ", section Origin = " << this->origin << endl;
 	
 	if (debugON == true) {
 		itk::RescaleIntensityImageFilter<ImageType,CharImageType>::Pointer rescaler = itk::RescaleIntensityImageFilter<ImageType,CharImageType>::New();
@@ -518,6 +532,7 @@ public:
 																ImageType::Pointer& mimg, double mrot, 
 																TransformType::Pointer& finaltransform);
 	void WriteOutputImages();
+	void WriteOutputImages(string&);
 	void WriteTransforms();
 	void WriteDiffImages( ); 
 };
@@ -718,7 +733,9 @@ double StackRepair::LinkSections(Section*sec1, Section *sec2, TransformType::Poi
 	double cropA, cropB, arot, brot;
 	getCropAndRotation(sec1->SequenceNumber, cropA, arot);
 	getCropAndRotation(sec2->SequenceNumber, cropB, brot);
-		
+	
+	//ImageType::PointType originalOriginA =  
+	
 	for (int i=0; i<3; ++i) {
 		if ( (sec1->getPrepImage(beta_invList[i], A, cropA) == true) && 
 			(sec2->getPrepImage(beta_invList[i], B, cropB) == true) )	{
@@ -1374,7 +1391,7 @@ void StackRepair::WriteDiffImages( ) {
 		fs::path ofname = OutputDirectoryNEW;
 		ofname /= ss.str();
 		ofname += curr->SectionName;
-		ofname += string(".png");
+		ofname += string(".jpg");
 		
 		//if (fs::exists(ofname) == false) {
 		//	continue;
@@ -1393,7 +1410,7 @@ void StackRepair::WriteDiffImages( ) {
 		}
 		
 		if (last_seq_no > 0) {
-			ImageType2::Pointer diff = ImageType2::New();
+			/*ImageType2::Pointer diff = ImageType2::New();
 			diff->SetRegions(imopt8->GetBufferedRegion());
 			diff->Allocate();
 
@@ -1409,13 +1426,21 @@ void StackRepair::WriteDiffImages( ) {
 				}
 				it1.Set(p1);
 			}
+			*/
+			itk::CheckerBoardImageFilter<ImageType2>::Pointer checkerbd =  itk::CheckerBoardImageFilter<ImageType2>::New();
+			checkerbd->SetInput1(imopt8);
+			checkerbd->SetInput2(last_imopt8);
+			itk::CheckerBoardImageFilter<ImageType2>::PatternArrayType pattern;
+			pattern.Fill(12);
+			checkerbd->SetCheckerPattern(pattern);
+
 			stringstream dd;
 			dd << setw(4)<<setfill('0')<< last_seq_no <<"_"<< setw(4)<<setfill('0') << curr->SequenceNumber;			
 			
 			fs::path dfname = DiffImageDirectory;
 			dfname /= dd.str();
 			//dfname += curr->SectionName;
-			dfname += string(".png");
+			dfname += string(".jpg");
 			cout << "Writing " << dfname << endl;
 			if (fs::exists(dfname) == true) {
 				fs::remove(dfname);
@@ -1423,8 +1448,12 @@ void StackRepair::WriteDiffImages( ) {
 
 			
 			itk::ImageFileWriter<ImageType2>::Pointer writer = itk::ImageFileWriter<ImageType2>::New();
-			writer->SetInput(diff);
+			//writer->SetInput(diff);
+			writer->SetInput(checkerbd->GetOutput());
 			writer->SetFileName(dfname.string());
+			itk::JPEGImageIO::Pointer jpgio = itk::JPEGImageIO::New();
+			jpgio->SetQuality(25);
+			writer->SetImageIO(jpgio);
 			writer->Update();
 		}
 		last_imopt8 = imopt8;
@@ -1436,12 +1465,35 @@ void StackRepair::WriteDiffImages( ) {
 void StackRepair::WriteOutputImages( ) {
 	
 	cout << "Creating output images in " << OutputDirectoryNEW << endl;
-
+	typedef itk::Image<itk::RGBPixel<unsigned char> , 2> ImageType2;
+	
 	Section *curr = startSection;
 	if (curr == NULL) {
 		return;
 	}
-
+	
+	//determine the image size for sagittal and coronal layers..
+	fs::path sagFname = OutputDirectoryNEW;
+	sagFname /= brain + "_"+ label +"_saggital.png";
+	fs::path trnFname = OutputDirectoryNEW;
+	trnFname /= brain + "_"+ label +"_transverse.png";
+	
+	unsigned int zdepth = 0;
+	while ( curr != NULL) {
+		zdepth++;
+		curr = curr->next;
+	}
+	cout << "depth of zstack: " << zdepth << endl;
+	ImageType2::Pointer sag = ImageType2::New();
+	ImageType2::Pointer trn = ImageType2::New();
+	itk::Size<2> sagsz, trnssz;
+	sagsz[0] = zdepth; sagsz[1] = gx;  //top view 
+	trnssz[0] = zdepth;  trnssz[1] = gy;   //side view
+	sag->SetRegions(sagsz);	sag->Allocate();
+	trn->SetRegions(trnssz); trn->Allocate();
+	
+	curr = startSection;
+	unsigned int zcounter = 0;
 	while ( curr != NULL) {
 
 	
@@ -1451,7 +1503,217 @@ void StackRepair::WriteOutputImages( ) {
 		fs::path ofname = OutputDirectoryNEW;
 		ofname /= ss.str();
 		ofname += curr->SectionName;
-		ofname += string(".png");
+		ofname += string(".jpg");
+		cout << "Writing " << ofname << endl;
+		if (fs::exists(ofname) == true) {
+			fs::remove(ofname);
+		}
+		
+		//continue;
+		
+		if (curr->Usable == false) {
+			curr = curr->next;
+			continue;
+		}
+		TransformType::ParametersType param = curr->Tx->GetParameters();
+		// cout << "Parameters: " << curr->SectionName << "," 
+		// << curr->origin[0] << ","
+		// << curr->origin[1] << ","
+		// << curr->direction[0] << ","
+		// << curr->direction[1] << ","
+		// << curr->size[0]<< ","
+		// << curr->size[1]<< ","
+		// << param[0] << "," 
+		// << param[1] << "," 
+		// << param[2] << "," 
+		// << param[3] << "," 
+		// << param[4] << ","
+		// << (int)curr->hflip << ","
+		// << (int)curr->vflip << ","
+		// << (int)curr->spProc << ","
+		// << endl;
+		
+		itk::ImageFileReader<RGBImageType>::Pointer reader = itk::ImageFileReader<RGBImageType>::New();
+		reader->SetFileName(curr->SectionPath.string());
+		RGBImageType::Pointer imRGB = reader->GetOutput();
+		imRGB->Update();
+		imRGB->SetOrigin(curr->origin);
+		double spacing[2]  = {1.0, 1.0};
+		imRGB->SetSpacing(spacing);
+		typedef itk::Matrix< double, 2, 2 > MatrixType;
+		MatrixType Mi;
+		Mi(0,0) = curr->direction[0];
+		Mi(0,1) = curr->direction[1];
+		Mi(1,0) = -1.0*curr->direction[1];
+		Mi(1,1) = curr->direction[0];
+		imRGB->SetDirection(Mi);
+
+		typedef itk::ResampleImageFilter<RGBImageType, RGBImageType>  ResampleFilterType;
+		ResampleFilterType::Pointer resample = ResampleFilterType::New();
+		resample->SetTransform( curr->Tx );
+
+		resample->SetInput( imRGB );
+		cout << "Size :" << imRGB->GetBufferedRegion().GetSize() << endl;
+		
+		//cout << "Setting Resampling params...." << endl;
+		ImageType::SizeType sz;
+		sz[0] = gx;
+		sz[1] = gy;
+		//double origin[2], o1[2];
+		double origin[2];
+		origin[0] = -0.5*(double)gx; //OFFSET HERE
+		origin[1] = -0.5*(double)gy;
+		MatrixType M;
+		M.SetIdentity();
+		resample->SetOutputDirection(M);
+		resample->SetSize( sz );
+		resample->SetOutputOrigin( origin );
+		resample->SetOutputSpacing( spacing );
+		RGBPixelType rgb; rgb.Fill(127);
+		resample->SetDefaultPixelValue( rgb );
+		RGBImageType::Pointer imopt16 = resample->GetOutput();
+		//cout << "Resampling ...."<< endl;
+		imopt16->Update();	               		
+		//cout << "Resampled ...."<< endl;
+		
+		ImageType2::Pointer imopt8 = ImageType2::New();
+		imopt8->SetRegions(imopt16->GetBufferedRegion());
+		imopt8->Allocate();
+		
+		itk::ImageRegionIterator<RGBImageType> it1(imopt16,imopt16->GetBufferedRegion());
+		itk::ImageRegionIterator<ImageType2> it2(imopt8,imopt8->GetBufferedRegion());
+		
+		unsigned int dave = 0, cnt = 0;
+		float maxval = 0.0;	
+		for( it1.GoToBegin(), it2.GoToBegin(); !it1.IsAtEnd(); ++it1, ++it2) {
+			for (int i=0; i<3; ++i) {
+				maxval = vnl_math_max(maxval,it1.Get()[i]);
+				dave += it1.Get()[i]; 
+				cnt++; 	
+			}
+		}
+		  
+		dave /= cnt;
+		if (dave <= 25) {dave = 20;}
+		if (dave >= 80) {dave = 80;}
+		if (maxval <= 255.0) {
+			dave = 25;
+		}
+		//cout << "Ave intensity : " << dave << " ...."<< endl;
+		unsigned int sagNdx = sz[0]/2;
+		unsigned int trnNdx = sz[1]/2;
+			
+		for( it1.GoToBegin(), it2.GoToBegin(); !it1.IsAtEnd(); ++it1, ++it2) {
+			itk::RGBPixel<unsigned char> d;	  
+			for (int i=0; i<3; ++i) {
+				unsigned short val = it1.Get()[i]*25/ dave;
+				d[i] = static_cast<unsigned char>(vnl_math_min(255,val));
+			}
+			it2.Set(d);
+			itk::Index<2> ndx = it1.GetIndex();
+			if (ndx[1] == sagNdx) {
+				itk::Index<2> ndx2;
+				ndx2[0] = zcounter;
+				ndx2[1] = ndx[0];
+				sag->SetPixel(ndx2,d);
+			}
+			if (ndx[0] == trnNdx) {
+				itk::Index<2> ndx2;
+				ndx2[0] = zcounter;
+				ndx2[1] = ndx[1];
+				trn->SetPixel(ndx2,d);
+			}
+		}
+		
+		//cout << "8 bit conversion ...";		
+		itk::ImageFileWriter<ImageType2>::Pointer writer = itk::ImageFileWriter<ImageType2>::New();
+		writer->SetInput(imopt8);
+		writer->SetFileName(ofname.string());
+		itk::JPEGImageIO::Pointer jpgio = itk::JPEGImageIO::New();
+		jpgio->SetQuality(25);
+		writer->SetImageIO(jpgio);
+		writer->Update();
+		//cout << "Written" << endl;
+		zcounter++;
+		curr = curr->next;
+	}
+	itk::ImageFileWriter<ImageType2>::Pointer sagwriter = itk::ImageFileWriter<ImageType2>::New();
+	sagwriter->SetInput(sag);
+	sagwriter->SetFileName( sagFname.string() );
+	sagwriter->Update();
+
+	itk::ImageFileWriter<ImageType2>::Pointer trnwriter = itk::ImageFileWriter<ImageType2>::New();
+	trnwriter->SetInput(trn);
+	trnwriter->SetFileName( trnFname.string() );
+	trnwriter->Update();	
+	
+	cout << "Writing complete " << endl;
+}
+
+void StackRepair::WriteOutputImages( string& displist) {
+	
+	cout << "Creating selected output images in " << OutputDirectoryNEW << endl;
+	bool brOpen = false;
+	vector<unsigned int> SeqNoList;
+	unsigned int val;
+	size_t n1 = 0, n2 = string::npos;
+	
+	for (unsigned int i=0; i<displist.length(); ++i) {
+		switch (displist[i]) {
+		case '[':	
+			brOpen = true; 
+			n1 = i+1;
+			break;
+		case ']':	
+			brOpen = false;
+		case ',':
+			n2 = i;
+			istringstream(displist.substr(n1,n2-n1)) >> val;
+			n1 = n2+1;
+			SeqNoList.push_back(val);				
+			break;
+		}
+		if (brOpen == false) {
+			break;
+		}
+	}
+	
+	if (brOpen == true) {
+		cout << "List of files for display contains space OR the ']' has not been closed" << endl;
+		return;
+	}
+	
+	cout << "Displaying sequence numbers :";
+	for (unsigned int i=0; i<SeqNoList.size(); ++i) {
+		cout << SeqNoList[i] << ", ";
+	}
+	cout << endl;
+	
+	Section *curr = startSection;
+	if (curr == NULL) {
+		return;
+	}
+
+	while ( curr != NULL) {
+		
+		bool proceed = false;
+		for (unsigned int i=0; i<SeqNoList.size(); ++i) {
+			if (SeqNoList[i] == curr->SequenceNumber) {
+				proceed = true;
+			}
+		}
+		if (proceed == false)	{
+			curr = curr->next;
+			continue;
+		}
+		
+		stringstream ss;
+		ss << setw(4)<<setfill('0')<< curr->SequenceNumber<<"_";
+	
+		fs::path ofname = OutputDirectoryNEW;
+		ofname /= ss.str();
+		ofname += curr->SectionName;
+		ofname += string(".jpg");
 		cout << "Writing " << ofname << endl;
 		if (fs::exists(ofname) == true) {
 			fs::remove(ofname);
@@ -1568,7 +1830,6 @@ void StackRepair::WriteOutputImages( ) {
 
 	cout << "Writing complete " << endl;
 }
-
 
 
 
@@ -1747,7 +2008,9 @@ int main(int argc, char * argv[]) {
 		<< "\t -Y (global translation Y in pixels, default: 0)"<< endl
 		<< "\t -gx (canvas size X in pixels, default: 1000)"<< endl
 		<< "\t -gy (canvas size Y in pixels, default: 1000)"<< endl
-		<< "\t -cmd (repair string in [], e.g. [5-6,7])"<< endl;
+		<< "\t -cmd (repair string in [], e.g. [5:6,7,6c0.2,7r-30])"<< endl 
+		<< "\t -displaySelected (Quickly display only selected sections in [] e.g. [5,6,7], Sagittal and transverse images are not created if you specify this option.)"<< endl
+		<< "\t -diff (Generate checkerboard images (default is off), note there is no argument for this option and this cannot be combined with displaySelected)"; 
 
 		return EXIT_FAILURE;
 	}		
@@ -1759,48 +2022,62 @@ int main(int argc, char * argv[]) {
 	unsigned int gy = 1000;
 	int i = 3;
 	debugON = false;
-	string excl("");
+	bool displaySelected = false, showDiff = false; 
+	string excl(""), dispSel("");
 	
-	while (i < (argc-1)) {
-		string token(argv[i++]);
-		string value(argv[i++]);
+	while (i < argc) {
+		string token(argv[i]), value("");
+		i++;
+
 		if (token.compare("-ROT") == 0) {
+			if (i < argc) { value.assign(argv[i]);	i++; }
 			off[0] = vnl_math::pi*atof(value.c_str())/180.0;
 			off_provided[0] = true;
 			cout << "Global Rotation: " << off[0] << endl;
 		}
 		else if (token.compare("-beta_inv") == 0) {
+			if (i < argc) { value.assign(argv[i]);	i++; }
 			beta_inv = atof(value.c_str());
 			cout << "beta inv: " << beta_inv << endl;
 		}
 		else if (token.compare("-gx") == 0) {
+			if (i < argc) { value.assign(argv[i]);	i++; }
 			gx = atoi(value.c_str());
 			cout << "gx: " << gx << endl;
 		}
 		else if (token.compare("-gy") == 0) {
+			if (i < argc) { value.assign(argv[i]);	i++; }
 			gy = atoi(value.c_str());
 			cout << "gy: " << gy << endl;
 		}		
 		else if (token.compare("-X") == 0) {
+			if (i < argc) { value.assign(argv[i]);	i++; }
 			off[1] = atoi(value.c_str());
 			off_provided[1] = true;
 			cout << "Global X: " << off[1] << endl;
 		}
 		else if (token.compare("-Y") == 0) {
+			if (i < argc) { value.assign(argv[i]);	i++; }
 			off[2] = atoi(value.c_str());
 			off_provided[2] = true;
 			cout << "Global Y: " << off[2] << endl;
 		}		
 		else if (token.compare("-cmd") == 0) {
+			if (i < argc) { value.assign(argv[i]);	i++; }
 			excl = value;
 			cout << "cmd: " << excl << endl;
 		}		
-		// else if (token.compare("-debug") == 0) {
-			// debugON = true;
-			// cout << endl << "Cannot RUNNING IN DEBUG MODE (PRESS ENTER To CONFIRM)" << endl << endl;
-			// cin.get();
-			// i--;
-		// }
+		else if (token.compare("-displaySelected") == 0) {
+			if (i < argc) { value.assign(argv[i]);	i++; }
+			displaySelected = true;
+			dispSel = value;
+			cout <<  "Display only "<< value << endl;
+		}
+		else if (token.compare("-showDiff") == 0) {
+			showDiff = true;
+			cout <<  "Show Diff images"<< value << endl;
+		}		
+		 
 		else {
 			cout << "Token "<< token <<" cannot be identified" << endl;
 			return EXIT_FAILURE;
@@ -1846,8 +2123,18 @@ int main(int argc, char * argv[]) {
 
 	repr.ResolveLinks();
 	repr.ComposeStack(off);
-	repr.WriteOutputImages();
 	repr.WriteTransforms();
-	repr.WriteDiffImages();
+	if (displaySelected == true) {
+		cout << "Displaying selected." << endl;
+		repr.WriteOutputImages(dispSel);
+	}
+	else {
+		cout << "Displaying all images." << endl;
+		repr.WriteOutputImages();
+		if (showDiff == true) {
+			repr.WriteDiffImages();
+		}
+	}
+
 	return EXIT_SUCCESS;
 }

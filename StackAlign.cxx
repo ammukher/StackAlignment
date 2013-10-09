@@ -8,10 +8,10 @@
 #include <vector>
 #include <iomanip>
 #include <boost/algorithm/string.hpp>
-#include <sys/time.h>
+//#include <sys/time.h>
 #include <boost/filesystem.hpp>
-#include <unistd.h>
-#include <sys/stat.h>
+//#include <unistd.h>
+//#include <sys/stat.h>
 #include "itkImage.h"
 #include "itkImageFileReader.h"
 #include "itkImageFileWriter.h"
@@ -30,6 +30,7 @@
 #include "itkMeanSquaresImageToImageMetric.h"
 #include "itkRegularStepGradientDescentOptimizer.h"
 #include "itkMultiResolutionImageRegistrationMethod.h"
+#include "itkCheckerBoardImageFilter.h"
 
 
 #include "itkArray.h"
@@ -87,6 +88,17 @@ void WriteDiffImage(const char* filename, ImageType::Pointer&fimg, ImageType::Po
 	CharImageType::Pointer mimg2 = resample->GetOutput();
 	mimg2->Update();
 	
+	itk::CheckerBoardImageFilter<CharImageType>::Pointer checkerbd =  itk::CheckerBoardImageFilter<CharImageType>::New();
+	checkerbd->SetInput1(fimg2);
+	checkerbd->SetInput2(mimg2);
+
+	itk::ImageFileWriter<CharImageType>::Pointer writer = itk::ImageFileWriter<CharImageType>::New();
+	writer->SetInput(checkerbd->GetOutput());
+	stringstream Fname;
+	Fname << filename << ".png";
+	writer->SetFileName(Fname.str());
+	writer->Update();
+	/*
 	CharImageType::Pointer diff = CharImageType::New();
 	diff->SetRegions(sz);
 	diff->Allocate();
@@ -105,6 +117,7 @@ void WriteDiffImage(const char* filename, ImageType::Pointer&fimg, ImageType::Po
 	Fname << filename << ".png";
 	writer->SetFileName(Fname.str());
 	writer->Update();
+	*/
 }
 
 
@@ -584,7 +597,7 @@ bool StackAlign::ReadList(fs::path& listFName, fs::path& optdir) {
 			//cin.get();
 		}
 		else {
-			cout << "...... image file deosnot exist." << endl << "Press Ctrl+C to quit, enter to continue" << endl;
+			cout << "File:" << temp.string() <<" doesnot exist." << endl << "Press Ctrl+C to quit, enter to continue" << endl;
 			cin.get();
 		}
 	}
@@ -1227,7 +1240,7 @@ void StackAlign::WriteDiffImages( ) {
 		}
 		
 		if (last_seq_no > 0) {
-			ImageType2::Pointer diff = ImageType2::New();
+			/*ImageType2::Pointer diff = ImageType2::New();
 			diff->SetRegions(imopt8->GetBufferedRegion());
 			diff->Allocate();
 
@@ -1243,6 +1256,14 @@ void StackAlign::WriteDiffImages( ) {
 				}
 				it1.Set(p1);
 			}
+			*/
+			itk::CheckerBoardImageFilter<ImageType2>::Pointer checkerbd =  itk::CheckerBoardImageFilter<ImageType2>::New();
+			checkerbd->SetInput1(imopt8);
+			checkerbd->SetInput2(last_imopt8);
+			itk::CheckerBoardImageFilter<ImageType2>::PatternArrayType pattern;
+			pattern.Fill(12);
+			checkerbd->SetCheckerPattern(pattern);			
+			
 			stringstream dd;
 			dd << setw(4)<<setfill('0')<< last_seq_no <<"_"<< setw(4)<<setfill('0') << curr->SequenceNumber;			
 			
@@ -1257,7 +1278,8 @@ void StackAlign::WriteDiffImages( ) {
 
 			
 			itk::ImageFileWriter<ImageType2>::Pointer writer = itk::ImageFileWriter<ImageType2>::New();
-			writer->SetInput(diff);
+			//writer->SetInput(diff);
+			writer->SetInput(checkerbd->GetOutput());
 			writer->SetFileName(dfname.string());
 			writer->Update();
 		}
